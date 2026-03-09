@@ -1,0 +1,14 @@
+{
+  "name": "job-application-agent",
+  "version": "1.0.0",
+  "description": "Automated job application agent using browser-use",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "dependencies": {
+    "electron": "^33.0.0"
+  },
+  "devDependencies": {}
+}

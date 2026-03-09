@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Job Application Agent</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Draggable titlebar for window movement -->
+  <div class="titlebar"></div>
+
+  <!-- Setup Panel (shown first) -->
+  <div id="setup-panel" class="setup-panel">
+    <div class="setup-content">
+      <h1>Job Application Agent</h1>
+      <p class="subtitle">Automate your job applications with AI</p>
+
+      <div class="setup-section">
+        <h2>Your Profile</h2>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Full Name</label>
+            <input type="text" id="profile-name" placeholder="John Doe">
+          </div>
+          <div class="form-group">
+            <label>Email</label>
+            <input type="email" id="profile-email" placeholder="john@example.com">
+          </div>
+          <div class="form-group">
+            <label>Phone</label>
+            <input type="tel" id="profile-phone" placeholder="+1 (555) 123-4567">
+          </div>
+          <div class="form-group">
+            <label>LinkedIn URL</label>
+            <input type="url" id="profile-linkedin" placeholder="https://linkedin.com/in/johndoe">
+          </div>
+          <div class="form-group">
+            <label>Location</label>
+            <input type="text" id="profile-location" placeholder="San Francisco, CA">
+          </div>
+          <div class="form-group">
+            <label>Resume (PDF)</label>
+            <div class="file-input">
+              <input type="text" id="profile-resume" placeholder="Select a PDF file..." readonly>
+              <button id="btn-select-resume" class="btn-small">Browse</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="setup-section">
+        <h2>Job Application URLs</h2>
+        <p class="hint">Enter up to 10 job application page URLs (one per line)</p>
+        <textarea id="urls-input" rows="8" placeholder="https://company1.com/careers/apply/12345
+https://company2.com/jobs/67890
+https://boards.greenhouse.io/company/jobs/123"></textarea>
+      </div>
+
+      <button id="btn-start" class="btn-primary">Start Applications</button>
+    </div>
+  </div>
+
+  <!-- Main App (shown after start) -->
+  <div id="main-app" class="main-app hidden">
+    <!-- Left Sidebar -->
+    <div class="sidebar">
+      <div class="sidebar-header">
+        <h2>Sessions</h2>
+        <button id="btn-back" class="btn-small" title="Back to setup">+ New</button>
+      </div>
+      <div id="session-tabs" class="session-tabs"></div>
+    </div>
+
+    <!-- Right Panel -->
+    <div class="main-panel">
+      <div id="session-view" class="session-view">
+        <div class="empty-state">
+          <p>Select a session from the sidebar to view progress</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
