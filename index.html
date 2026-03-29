@@ -7,61 +7,106 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <!-- Draggable titlebar for window movement -->
+  <!-- Draggable titlebar -->
   <div class="titlebar"></div>
 
-  <!-- Setup Panel (shown first) -->
+  <!-- Setup Panel -->
   <div id="setup-panel" class="setup-panel">
     <div class="setup-content">
       <h1>Job Application Agent</h1>
       <p class="subtitle">Automate your job applications with AI</p>
 
+      <!-- Resume Upload -->
       <div class="setup-section">
-        <h2>Your Profile</h2>
-        <div class="form-grid">
-          <div class="form-group">
-            <label>Full Name</label>
-            <input type="text" id="profile-name" placeholder="John Doe">
-          </div>
-          <div class="form-group">
-            <label>Email</label>
-            <input type="email" id="profile-email" placeholder="john@example.com">
-          </div>
-          <div class="form-group">
-            <label>Phone</label>
-            <input type="tel" id="profile-phone" placeholder="+1 (555) 123-4567">
-          </div>
-          <div class="form-group">
-            <label>LinkedIn URL</label>
-            <input type="url" id="profile-linkedin" placeholder="https://linkedin.com/in/johndoe">
-          </div>
-          <div class="form-group">
-            <label>Location</label>
-            <input type="text" id="profile-location" placeholder="San Francisco, CA">
-          </div>
-          <div class="form-group">
-            <label>Resume (PDF)</label>
-            <div class="file-input">
-              <input type="text" id="profile-resume" placeholder="Select a PDF file..." readonly>
-              <button id="btn-select-resume" class="btn-small">Browse</button>
+        <h2>Resume</h2>
+        <div id="resume-dropzone" class="resume-dropzone">
+          <div id="dropzone-content" class="dropzone-content">
+            <div class="dropzone-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="12" y1="18" x2="12" y2="12"/>
+                <polyline points="9 15 12 12 15 15"/>
+              </svg>
             </div>
+            <p class="dropzone-text">Click to upload your resume</p>
+            <p class="dropzone-hint">PDF format</p>
+          </div>
+          <div id="dropzone-loaded" class="dropzone-loaded hidden">
+            <div class="resume-file-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+              </svg>
+            </div>
+            <div class="resume-file-info">
+              <span id="resume-filename" class="resume-filename"></span>
+              <span class="resume-status" id="resume-status">Extracting profile...</span>
+            </div>
+            <button id="btn-change-resume" class="btn-icon" title="Change resume">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
           </div>
         </div>
       </div>
 
+      <!-- Extracted Profile Preview -->
+      <div id="profile-card" class="setup-section profile-card hidden">
+        <h2>Extracted Profile</h2>
+        <div class="profile-grid">
+          <div class="profile-item">
+            <span class="profile-label">Name</span>
+            <span class="profile-value" id="profile-name">--</span>
+          </div>
+          <div class="profile-item">
+            <span class="profile-label">Email</span>
+            <span class="profile-value" id="profile-email">--</span>
+          </div>
+          <div class="profile-item">
+            <span class="profile-label">Phone</span>
+            <span class="profile-value" id="profile-phone">--</span>
+          </div>
+          <div class="profile-item">
+            <span class="profile-label">LinkedIn</span>
+            <span class="profile-value" id="profile-linkedin">--</span>
+          </div>
+          <div class="profile-item">
+            <span class="profile-label">Location</span>
+            <span class="profile-value" id="profile-location">--</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Job URLs -->
       <div class="setup-section">
         <h2>Job Application URLs</h2>
-        <p class="hint">Enter up to 10 job application page URLs (one per line)</p>
-        <textarea id="urls-input" rows="8" placeholder="https://company1.com/careers/apply/12345
-https://company2.com/jobs/67890
-https://boards.greenhouse.io/company/jobs/123"></textarea>
+        <p class="hint">Add up to 10 job application page URLs</p>
+        <div id="url-list" class="url-list">
+          <div class="url-row">
+            <div class="url-number">1</div>
+            <input type="url" class="url-input" placeholder="Paste job application URL..." data-index="0">
+            <button class="btn-icon btn-remove-url hidden" title="Remove">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <button id="btn-add-url" class="btn-add-url">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          Add another URL
+        </button>
       </div>
 
       <button id="btn-start" class="btn-primary">Start Applications</button>
     </div>
   </div>
 
-  <!-- Main App (shown after start) -->
+  <!-- Main App -->
   <div id="main-app" class="main-app hidden">
     <!-- Left Sidebar -->
     <div class="sidebar">
@@ -74,10 +119,16 @@ https://boards.greenhouse.io/company/jobs/123"></textarea>
 
     <!-- Right Panel -->
     <div class="main-panel">
-      <div id="session-view" class="session-view">
-        <div class="empty-state">
-          <p>Select a session from the sidebar to view progress</p>
+      <!-- Webview container: all webviews live here, only active one is visible -->
+      <div id="webview-container" class="webview-container"></div>
+
+      <!-- Log bar at the bottom -->
+      <div id="log-bar" class="log-bar">
+        <div class="log-bar-header">
+          <span class="log-bar-title">Agent Activity</span>
+          <span id="log-bar-status" class="log-bar-status"></span>
         </div>
+        <div id="log-area" class="log-area"></div>
       </div>
     </div>
   </div>
