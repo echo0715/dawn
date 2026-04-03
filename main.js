@@ -170,7 +170,7 @@ function createWindow() {
       webviewTag: true,  // Enable <webview> tags
     },
     titleBarStyle: 'hiddenInset',
-    backgroundColor: '#1a1a2e',
+    backgroundColor: '#f5f6fa',
   });
 
   mainWindow.loadFile('index.html');
@@ -215,6 +215,31 @@ ipcMain.handle('select-file', async () => {
     filters: [{ name: 'PDF Files', extensions: ['pdf'] }],
   });
   return result.canceled ? null : result.filePaths[0] || null;
+});
+
+ipcMain.handle('fetch-jobs', async () => {
+  try {
+    const { net } = require('electron');
+    const response = await net.fetch('http://localhost:8765/fetch-jobs', { method: 'POST' });
+    return await response.json();
+  } catch (e) {
+    console.error('fetch-jobs error:', e.message);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('get-jobs', async (event, { search, category }) => {
+  try {
+    const { net } = require('electron');
+    const params = new URLSearchParams();
+    if (search) params.set('search', search);
+    if (category) params.set('category', category);
+    const response = await net.fetch(`http://localhost:8765/jobs?${params.toString()}`);
+    return await response.json();
+  } catch (e) {
+    console.error('get-jobs error:', e.message);
+    return { success: false, error: e.message };
+  }
 });
 
 ipcMain.handle('parse-resume', async (event, filePath) => {

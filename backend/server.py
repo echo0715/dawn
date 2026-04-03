@@ -20,10 +20,12 @@ from urllib.parse import urlparse
 
 import httpx
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from pydantic import BaseModel
 
 import openai
+
+from job_scraper import fetch_and_store_jobs, get_all_jobs, get_job_stats, init_db
 
 # ─── Monkey-patches for Electron CDP compatibility ───────────────────────────
 # These must run BEFORE any BrowserSession is created.
@@ -74,6 +76,34 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelna
 logger = logging.getLogger('job-agent')
 
 app = FastAPI()
+
+# Initialize job database on startup
+init_db()
+
+
+# ─── Job Gathering Endpoints ─────────────────────────────────────────────────
+
+@app.post('/fetch-jobs')
+async def fetch_jobs_endpoint():
+    """Fetch latest jobs from GitHub and store in database."""
+    try:
+        stats = await fetch_and_store_jobs()
+        return {'success': True, **stats}
+    except Exception as e:
+        logger.error(f'Fetch jobs error: {traceback.format_exc()}')
+        return {'success': False, 'error': str(e)}
+
+
+@app.get('/jobs')
+async def get_jobs_endpoint(search: str = Query('', description='Search term'), category: str = Query('', description='Filter by category')):
+    """Get all jobs from the database."""
+    try:
+        jobs = get_all_jobs(search=search, category=category)
+        stats = get_job_stats()
+        return {'success': True, 'jobs': jobs, 'stats': stats}
+    except Exception as e:
+        logger.error(f'Get jobs error: {traceback.format_exc()}')
+        return {'success': False, 'error': str(e)}
 
 
 # ─── Resume Parsing ──────────────────────────────────────────────────────────
@@ -400,7 +430,7 @@ async def websocket_endpoint(ws: WebSocket):
 						'url': url,
 					})
 
-				asyncio.create_task(run_agents_sequential(urls, profile))
+				asyncio.create_task(run_agents_parallel(urls, profile))
 
 			elif msg['type'] == 'webview_ready':
 				sid = msg.get('session_id')
@@ -418,11 +448,14 @@ async def websocket_endpoint(ws: WebSocket):
 		ws_connection = None
 
 
-async def run_agents_sequential(urls: list[str], profile: dict):
-	"""Run agents one at a time to avoid CDP connection conflicts."""
-	for i, url in enumerate(urls):
-		session_id = f'session_{i}'
-		await run_agent(session_id, url, profile)
+async def run_agents_parallel(urls: list[str], profile: dict):
+	"""Run agents in parallel — each gets its own BrowserSession
+	(separate CDP WebSocket) focused on its own webview target."""
+	tasks = [
+		asyncio.create_task(run_agent(f'session_{i}', url, profile))
+		for i, url in enumerate(urls)
+	]
+	await asyncio.gather(*tasks, return_exceptions=True)
 
 
 if __name__ == '__main__':

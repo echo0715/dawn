@@ -7,4 +7,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.send('register-webview', { sessionId, webContentsId }),
   unregisterWebview: (sessionId) =>
     ipcRenderer.send('unregister-webview', { sessionId }),
+  fetchJobs: () => ipcRenderer.invoke('fetch-jobs'),
+  getJobs: (search, category) => ipcRenderer.invoke('get-jobs', { search, category }),
 });

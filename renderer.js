@@ -26,6 +26,43 @@ const btnChangeResume = document.getElementById('btn-change-resume');
 let currentProfile = {};
 let resumePath = '';
 
+// ─── Page Navigation ─────────────────────────────────────────────────────────
+
+const navTabs = document.querySelectorAll('.nav-tab');
+const pages = document.querySelectorAll('.page');
+
+navTabs.forEach(tab => {
+  tab.addEventListener('click', () => {
+    const target = tab.dataset.page;
+    navTabs.forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    pages.forEach(p => p.classList.remove('active'));
+    document.getElementById(`page-${target}`).classList.add('active');
+  });
+});
+
+// ─── Stats Updates ───────────────────────────────────────────────────────────
+
+function updateStats() {
+  // Jobs loaded
+  const jobCards = document.querySelectorAll('.job-card');
+  document.getElementById('stat-jobs-loaded').textContent = jobCards.length;
+
+  // URLs queued
+  const urls = getUrls();
+  document.getElementById('stat-urls-queued').textContent = urls.length;
+
+  // Profile status
+  const profileStatus = document.getElementById('stat-profile-status');
+  if (currentProfile.name) {
+    profileStatus.textContent = 'Ready';
+    profileStatus.style.color = 'var(--success)';
+  } else {
+    profileStatus.textContent = '--';
+    profileStatus.style.color = '';
+  }
+}
+
 // ─── Resume Upload & Profile Extraction ──────────────────────────────────────
 
 async function selectAndParseResume() {
@@ -48,9 +85,11 @@ async function selectAndParseResume() {
       currentProfile = result.profile;
       currentProfile.resume = filePath;
       displayProfile(currentProfile);
+      populateUserForm(currentProfile);
       resumeStatus.textContent = 'Profile extracted';
       resumeStatus.className = 'resume-status done';
-      localStorage.setItem('userProfile', JSON.stringify(currentProfile));
+      saveAllProfileData();
+      updateStats();
     } else {
       resumeStatus.textContent = result?.error || 'Could not extract profile';
       resumeStatus.className = 'resume-status error';
@@ -70,6 +109,18 @@ function displayProfile(profile) {
   profileCard.classList.remove('hidden');
 }
 
+function populateUserForm(profile) {
+  if (profile.name) document.getElementById('user-name').value = profile.name;
+  if (profile.email) document.getElementById('user-email').value = profile.email;
+  if (profile.phone) document.getElementById('user-phone').value = profile.phone;
+  if (profile.location) document.getElementById('user-location').value = profile.location;
+  if (profile.linkedin) document.getElementById('user-linkedin').value = profile.linkedin;
+  if (profile.github) document.getElementById('user-github').value = profile.github;
+  if (profile.portfolio) document.getElementById('user-portfolio').value = profile.portfolio;
+  if (profile.visa) document.getElementById('user-visa').value = profile.visa;
+  if (profile.summary) document.getElementById('user-summary').value = profile.summary;
+}
+
 resumeDropzone.addEventListener('click', (e) => {
   if (e.target.closest('#btn-change-resume')) return;
   selectAndParseResume();
@@ -85,9 +136,49 @@ btnChangeResume.addEventListener('click', (e) => {
   selectAndParseResume();
 });
 
+// ─── User Profile Form ──────────────────────────────────────────────────────
+
+function getUserFormData() {
+  return {
+    name: document.getElementById('user-name').value.trim(),
+    email: document.getElementById('user-email').value.trim(),
+    phone: document.getElementById('user-phone').value.trim(),
+    location: document.getElementById('user-location').value.trim(),
+    linkedin: document.getElementById('user-linkedin').value.trim(),
+    github: document.getElementById('user-github').value.trim(),
+    portfolio: document.getElementById('user-portfolio').value.trim(),
+    visa: document.getElementById('user-visa').value,
+    summary: document.getElementById('user-summary').value.trim(),
+  };
+}
+
+function saveAllProfileData() {
+  const formData = getUserFormData();
+  const merged = { ...currentProfile, ...formData, resume: resumePath };
+  localStorage.setItem('userProfile', JSON.stringify(merged));
+}
+
+document.getElementById('btn-save-profile').addEventListener('click', () => {
+  const formData = getUserFormData();
+  currentProfile = { ...currentProfile, ...formData };
+  saveAllProfileData();
+  updateStats();
+
+  const btn = document.getElementById('btn-save-profile');
+  const originalHTML = btn.innerHTML;
+  btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Saved!`;
+  btn.style.borderColor = 'var(--success)';
+  btn.style.color = 'var(--success)';
+  setTimeout(() => {
+    btn.innerHTML = originalHTML;
+    btn.style.borderColor = '';
+    btn.style.color = '';
+  }, 2000);
+});
+
 // ─── URL List Management ─────────────────────────────────────────────────────
 
-function addUrlRow() {
+function addUrlRow(shouldFocus = true) {
   const rows = urlList.querySelectorAll('.url-row');
   if (rows.length >= 10) return;
 
@@ -106,7 +197,7 @@ function addUrlRow() {
   urlList.appendChild(row);
   updateUrlNumbers();
   updateRemoveButtons();
-  row.querySelector('.url-input').focus();
+  if (shouldFocus) row.querySelector('.url-input').focus();
 }
 
 function removeUrlRow(btn) {
@@ -116,6 +207,7 @@ function removeUrlRow(btn) {
   row.remove();
   updateUrlNumbers();
   updateRemoveButtons();
+  updateStats();
 }
 
 function updateUrlNumbers() {
@@ -149,6 +241,7 @@ urlList.addEventListener('input', (e) => {
   if (e.target === lastInput && e.target.value.trim() && rows.length < 10) {
     addUrlRow();
   }
+  updateStats();
 });
 
 function getUrls() {
@@ -174,6 +267,8 @@ function loadProfile() {
         resumeStatus.className = 'resume-status done';
         displayProfile(currentProfile);
       }
+      populateUserForm(currentProfile);
+      updateStats();
     }
   } catch (e) { /* ignore */ }
 }
@@ -242,9 +337,6 @@ function handleMessage(msg) {
       renderTabs();
       if (activeSessionId === msg.session_id) renderLogs();
       break;
-
-    // Browser control (click, type, screenshot, DOM) is now handled
-    // directly by browser-use via CDP — no relay needed.
   }
 }
 
@@ -264,14 +356,12 @@ function createWebview(sessionId, url) {
   webview.id = `webview-${sessionId}`;
   webview.setAttribute('src', url);
   webview.setAttribute('partition', `persist:${sessionId}`);
-  // Allow useful features
   webview.setAttribute('allowpopups', '');
 
   webview.addEventListener('dom-ready', () => {
     const wcId = webview.getWebContentsId();
     window.electronAPI.registerWebview(sessionId, wcId);
     console.log(`Webview ready: ${sessionId} wcId=${wcId}`);
-    // Notify backend that the webview has loaded — it can now find the CDP target
     sendMessage({ type: 'webview_ready', session_id: sessionId, url: webview.getURL() });
   });
 
@@ -284,7 +374,6 @@ function createWebview(sessionId, url) {
 }
 
 function showWebview(sessionId) {
-  // Hide all webviews, show the selected one
   const webviews = webviewContainer.querySelectorAll('webview');
   webviews.forEach(wv => wv.classList.remove('active'));
 
@@ -302,9 +391,11 @@ btnStart.addEventListener('click', () => {
   if (urls.length === 0) { alert('Please enter at least one valid URL'); return; }
   if (urls.length > 10) { alert('Maximum 10 URLs allowed'); return; }
 
-  if (!resumePath) { alert('Please upload your resume first'); return; }
+  if (!resumePath) { alert('Please upload your resume first (go to Profile tab)'); return; }
 
-  const profile = currentProfile;
+  // Merge form data into profile before sending
+  const formData = getUserFormData();
+  const profile = { ...currentProfile, ...formData, resume: resumePath };
 
   // Switch view
   setupPanel.classList.add('hidden');
@@ -332,7 +423,6 @@ btnStart.addEventListener('click', () => {
 btnBack.addEventListener('click', () => {
   mainApp.classList.add('hidden');
   setupPanel.classList.remove('hidden');
-  // Clean up webviews
   for (const sid of Object.keys(sessions)) {
     window.electronAPI.unregisterWebview(sid);
   }
@@ -397,6 +487,133 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// ─── Job Board ───────────────────────────────────────────────────────────────
+
+const btnFetchJobs = document.getElementById('btn-fetch-jobs');
+const btnFetchLabel = document.getElementById('btn-fetch-label');
+const jobCardsContainer = document.getElementById('job-cards-container');
+const addedUrls = new Set();
+
+async function fetchJobs() {
+  btnFetchJobs.classList.add('loading');
+  btnFetchJobs.disabled = true;
+  btnFetchLabel.textContent = 'Fetching...';
+
+  jobCardsContainer.innerHTML = `
+    <div class="job-loading-state">
+      <div class="spinner"></div>
+      <span>Fetching jobs from GitHub...</span>
+    </div>
+  `;
+
+  try {
+    const result = await window.electronAPI.fetchJobs();
+    if (result && result.success) {
+      await loadJobs();
+    } else {
+      jobCardsContainer.innerHTML = `
+        <div class="job-empty-state">
+          <p>Failed to fetch jobs</p>
+          <p class="hint">${escapeHtml(result?.error || 'Check that the backend is running')}</p>
+        </div>
+      `;
+    }
+  } catch (e) {
+    jobCardsContainer.innerHTML = `
+      <div class="job-empty-state">
+        <p>Failed to fetch jobs</p>
+        <p class="hint">${escapeHtml(e.message)}</p>
+      </div>
+    `;
+  } finally {
+    btnFetchJobs.classList.remove('loading');
+    btnFetchJobs.disabled = false;
+    btnFetchLabel.textContent = 'Fetch Jobs';
+  }
+}
+
+async function loadJobs() {
+  try {
+    const result = await window.electronAPI.getJobs('', '');
+    if (result && result.success && result.jobs.length > 0) {
+      renderJobCards(result.jobs);
+      updateStats();
+    }
+  } catch (e) {
+    console.error('loadJobs error:', e);
+  }
+}
+
+function renderJobCards(jobs) {
+  if (jobs.length === 0) return;
+
+  const empty = jobCardsContainer.querySelector('.job-empty-state');
+  if (empty) empty.remove();
+
+  jobCardsContainer.innerHTML = jobs.filter(j => j.apply_url).map((job, i) => {
+    const initial = (job.company || '?')[0].toUpperCase();
+    const isAdded = addedUrls.has(job.apply_url);
+    return `
+      <div class="job-card${isAdded ? ' added' : ''}" data-index="${i}">
+        <div class="job-card-icon">${escapeHtml(initial)}</div>
+        <div class="job-card-body">
+          <div class="job-card-company">${escapeHtml(job.company)}</div>
+          <div class="job-card-title" title="${escapeHtml(job.position)}">${escapeHtml(job.position)}</div>
+          <div class="job-card-meta">
+            ${job.location ? `<span>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+              ${escapeHtml(job.location)}
+            </span>` : ''}
+            ${job.salary ? `<span class="salary">${escapeHtml(job.salary)}</span>` : ''}
+            ${job.age ? `<span>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              ${escapeHtml(job.age)}
+            </span>` : ''}
+            ${job.category ? `<span class="category-tag">${escapeHtml(job.category)}</span>` : ''}
+          </div>
+        </div>
+        <div class="job-card-actions">
+          <button class="btn-add-job${isAdded ? ' added' : ''}" data-url="${escapeHtml(job.apply_url)}">${isAdded ? 'Added' : 'Add'}</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// "Add" button: add the job URL to the application URL list
+jobCardsContainer.addEventListener('click', (e) => {
+  const btn = e.target.closest('.btn-add-job');
+  if (!btn || btn.classList.contains('added')) return;
+  const url = btn.dataset.url;
+  if (!url) return;
+
+  const inputs = urlList.querySelectorAll('.url-input');
+  let filled = false;
+  for (const input of inputs) {
+    if (!input.value.trim()) {
+      input.value = url;
+      filled = true;
+      break;
+    }
+  }
+  if (!filled && inputs.length < 10) {
+    addUrlRow(false);
+    const newInputs = urlList.querySelectorAll('.url-input');
+    const lastInput = newInputs[newInputs.length - 1];
+    lastInput.value = url;
+  }
+
+  addedUrls.add(url);
+  btn.textContent = 'Added';
+  btn.classList.add('added');
+  btn.closest('.job-card').classList.add('added');
+  updateStats();
+});
+
+btnFetchJobs.addEventListener('click', fetchJobs);
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 loadProfile();
+loadJobs();
 connectWS();
+updateStats();
