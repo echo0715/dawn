@@ -21,6 +21,12 @@
           </svg>
           Home
         </button>
+        <button class="nav-tab" data-page="agent">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+          </svg>
+          Agent
+        </button>
         <button class="nav-tab" data-page="profile">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
@@ -112,6 +118,37 @@
           </svg>
           Start Applications
         </button>
+      </div>
+    </div>
+
+    <!-- ========== AGENT PAGE ========== -->
+    <div id="page-agent" class="page">
+      <div class="agent-layout">
+        <!-- Left Sidebar -->
+        <div class="sidebar">
+          <div class="sidebar-header">
+            <h2>Sessions</h2>
+            <button id="btn-back" class="btn-small" title="Back to setup">+ New</button>
+          </div>
+          <div id="session-tabs" class="session-tabs"></div>
+        </div>
+
+        <!-- Right Panel -->
+        <div class="main-panel">
+          <!-- Webview container -->
+          <div id="webview-container" class="webview-container">
+            <div class="webview-empty">Start applications from the Home tab to begin</div>
+          </div>
+
+          <!-- Log bar -->
+          <div id="log-bar" class="log-bar">
+            <div class="log-bar-header">
+              <span class="log-bar-title">Agent Activity</span>
+              <span id="log-bar-status" class="log-bar-status"></span>
+            </div>
+            <div id="log-area" class="log-area"></div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -254,33 +291,6 @@
             </button>
           </div>
         </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Main App -->
-  <div id="main-app" class="main-app hidden">
-    <!-- Left Sidebar -->
-    <div class="sidebar">
-      <div class="sidebar-header">
-        <h2>Sessions</h2>
-        <button id="btn-back" class="btn-small" title="Back to setup">+ New</button>
-      </div>
-      <div id="session-tabs" class="session-tabs"></div>
-    </div>
-
-    <!-- Right Panel -->
-    <div class="main-panel">
-      <!-- Webview container: all webviews live here, only active one is visible -->
-      <div id="webview-container" class="webview-container"></div>
-
-      <!-- Log bar at the bottom -->
-      <div id="log-bar" class="log-bar">
-        <div class="log-bar-header">
-          <span class="log-bar-title">Agent Activity</span>
-          <span id="log-bar-status" class="log-bar-status"></span>
-        </div>
-        <div id="log-area" class="log-area"></div>
       </div>
     </div>
   </div>

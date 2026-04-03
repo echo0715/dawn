@@ -26,6 +26,13 @@ if [ ! -d "node_modules" ]; then
     npm install
 fi
 
+# Kill any existing process on CDP port 9222 so Electron can bind it
+if lsof -ti:9222 >/dev/null 2>&1; then
+    echo "Port 9222 in use — killing existing process..."
+    kill $(lsof -ti:9222) 2>/dev/null || true
+    sleep 1
+fi
+
 # Start the app
 echo "Starting application..."
 npm start

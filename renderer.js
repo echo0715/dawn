@@ -6,7 +6,6 @@ let reconnectTimer = null;
 
 // ─── DOM Elements ─────────────────────────────────────────────────────────────
 const setupPanel = document.getElementById('setup-panel');
-const mainApp = document.getElementById('main-app');
 const sessionTabs = document.getElementById('session-tabs');
 const webviewContainer = document.getElementById('webview-container');
 const logArea = document.getElementById('log-area');
@@ -31,14 +30,16 @@ let resumePath = '';
 const navTabs = document.querySelectorAll('.nav-tab');
 const pages = document.querySelectorAll('.page');
 
+function switchToPage(pageName) {
+  navTabs.forEach(t => t.classList.remove('active'));
+  const targetTab = document.querySelector(`.nav-tab[data-page="${pageName}"]`);
+  if (targetTab) targetTab.classList.add('active');
+  pages.forEach(p => p.classList.remove('active'));
+  document.getElementById(`page-${pageName}`).classList.add('active');
+}
+
 navTabs.forEach(tab => {
-  tab.addEventListener('click', () => {
-    const target = tab.dataset.page;
-    navTabs.forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
-    pages.forEach(p => p.classList.remove('active'));
-    document.getElementById(`page-${target}`).classList.add('active');
-  });
+  tab.addEventListener('click', () => switchToPage(tab.dataset.page));
 });
 
 // ─── Stats Updates ───────────────────────────────────────────────────────────
@@ -204,10 +205,12 @@ function removeUrlRow(btn) {
   const row = btn.closest('.url-row');
   const rows = urlList.querySelectorAll('.url-row');
   if (rows.length <= 1) return;
+  const removedUrl = row.querySelector('.url-input').value.trim();
   row.remove();
   updateUrlNumbers();
   updateRemoveButtons();
   updateStats();
+  if (removedUrl) syncAddedUrls();
 }
 
 function updateUrlNumbers() {
@@ -242,6 +245,7 @@ urlList.addEventListener('input', (e) => {
     addUrlRow();
   }
   updateStats();
+  syncAddedUrls();
 });
 
 function getUrls() {
@@ -397,9 +401,8 @@ btnStart.addEventListener('click', () => {
   const formData = getUserFormData();
   const profile = { ...currentProfile, ...formData, resume: resumePath };
 
-  // Switch view
-  setupPanel.classList.add('hidden');
-  mainApp.classList.remove('hidden');
+  // Switch to Agent tab
+  switchToPage('agent');
 
   // Reset
   sessions = {};
@@ -421,8 +424,7 @@ btnStart.addEventListener('click', () => {
 });
 
 btnBack.addEventListener('click', () => {
-  mainApp.classList.add('hidden');
-  setupPanel.classList.remove('hidden');
+  switchToPage('home');
   for (const sid of Object.keys(sessions)) {
     window.electronAPI.unregisterWebview(sid);
   }
@@ -578,6 +580,31 @@ function renderJobCards(jobs) {
       </div>
     `;
   }).join('');
+}
+
+// Sync addedUrls set with current URL list and update job card styles
+function syncAddedUrls() {
+  const currentUrls = new Set(
+    Array.from(urlList.querySelectorAll('.url-input'))
+      .map(input => input.value.trim())
+      .filter(Boolean)
+  );
+  addedUrls.clear();
+  currentUrls.forEach(url => addedUrls.add(url));
+
+  // Update all job card buttons to reflect current state
+  jobCardsContainer.querySelectorAll('.btn-add-job').forEach(btn => {
+    const url = btn.dataset.url;
+    if (currentUrls.has(url)) {
+      btn.textContent = 'Added';
+      btn.classList.add('added');
+      btn.closest('.job-card').classList.add('added');
+    } else {
+      btn.textContent = 'Add';
+      btn.classList.remove('added');
+      btn.closest('.job-card').classList.remove('added');
+    }
+  });
 }
 
 // "Add" button: add the job URL to the application URL list

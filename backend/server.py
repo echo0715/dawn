@@ -279,39 +279,106 @@ async def run_agent(session_id: str, url: str, profile: dict):
 
 		# Find the webview target (now remapped to type 'page') and switch focus.
 		# The main Electron window has a file:// URL, webviews have http(s) URLs.
+		# Retry multiple times — some sites (e.g. Workday) redirect through
+		# intermediate pages, so the target may not appear immediately.
 		target_domain = urlparse(url).netloc
-		page_targets = browser_session.session_manager.get_all_page_targets()
-
-		logger.info(f'[{session_id}] Page targets after start ({len(page_targets)}):')
-		for t in page_targets:
-			logger.info(f'  {t.target_id}: type={t.target_type} url={t.url}')
+		# Also check the actual URL the webview reported via dom-ready
+		actual_url = webview_urls.get(session_id, '')
+		actual_domain = urlparse(actual_url).netloc if actual_url else ''
 
 		matched_target = None
-		for t in page_targets:
-			t_domain = urlparse(t.url).netloc
-			if t_domain == target_domain:
-				matched_target = t
-				break
+		cdp_fallback_target_id = None
+		for attempt in range(8):
+			page_targets = browser_session.session_manager.get_all_page_targets()
 
-		if not matched_target:
-			# Broader fallback: skip file:// and about:blank, match by domain substring
+			logger.info(f'[{session_id}] Target scan attempt {attempt + 1} ({len(page_targets)} targets):')
 			for t in page_targets:
-				if t.url.startswith('file://') or t.url == 'about:blank':
-					continue
-				if target_domain in t.url:
+				logger.info(f'  {t.target_id[:8]}: type={t.target_type} url={t.url[:80]}')
+
+			# Try exact domain match first
+			for t in page_targets:
+				t_domain = urlparse(t.url).netloc
+				if t_domain == target_domain or (actual_domain and t_domain == actual_domain):
 					matched_target = t
 					break
 
-		if not matched_target:
+			if not matched_target:
+				# Broader fallback: domain substring match, skip file:// and about:blank
+				for t in page_targets:
+					if t.url.startswith('file://') or t.url.startswith('data:') or t.url == 'about:blank':
+						continue
+					if target_domain in t.url or (actual_domain and actual_domain in t.url):
+						matched_target = t
+						break
+
+			if not matched_target:
+				# Try matching by base domain (e.g. "myworkdayjobs.com" from "salesforce.wd12.myworkdayjobs.com")
+				target_parts = target_domain.split('.')
+				base_domain = '.'.join(target_parts[-2:]) if len(target_parts) >= 2 else target_domain
+				for t in page_targets:
+					if t.url.startswith('file://') or t.url.startswith('data:') or t.url == 'about:blank':
+						continue
+					if base_domain in t.url:
+						matched_target = t
+						break
+
+			if not matched_target:
+				# Fallback: query CDP HTTP endpoint directly for ALL targets
+				# (including types that browser-use may not track, e.g. webview)
+				try:
+					async with httpx.AsyncClient() as client:
+						resp = await client.get(f'{CDP_HTTP_URL}/json', timeout=5)
+						all_targets = resp.json()
+					logger.info(f'[{session_id}] CDP /json fallback ({len(all_targets)} targets):')
+					for t in all_targets:
+						logger.info(f'  {t.get("id", "?")[:8]}: type={t.get("type")} url={t.get("url", "")[:80]}')
+					for t in all_targets:
+						t_url = t.get('url', '')
+						t_domain_parsed = urlparse(t_url).netloc
+						if (t_domain_parsed == target_domain
+								or (actual_domain and t_domain_parsed == actual_domain)
+								or target_domain in t_url
+								or (actual_domain and actual_domain in t_url)
+								or base_domain in t_url):
+							cdp_fallback_target_id = t.get('id')
+							logger.info(f'[{session_id}] Found target via CDP /json fallback: {cdp_fallback_target_id}')
+							break
+				except Exception as e:
+					logger.warning(f'[{session_id}] CDP /json fallback failed: {e}')
+
+			if matched_target or cdp_fallback_target_id:
+				break
+
+			if attempt < 7:
+				logger.info(f'[{session_id}] Target not found, retrying in 3s...')
+				await asyncio.sleep(3)
+
+		if not matched_target and not cdp_fallback_target_id:
 			raise RuntimeError(
 				f'Could not find CDP target for {url}. '
 				f'Page targets: {[(t.target_id[:8], t.url[:60]) for t in page_targets]}'
 			)
 
 		# Switch focus from the main window to the webview
-		logger.info(f'[{session_id}] Focusing on webview target: {matched_target.target_id[:8]}... url={matched_target.url}')
-		await browser_session.get_or_create_cdp_session(matched_target.target_id, focus=True)
-		browser_session.agent_focus_target_id = matched_target.target_id
+		focus_target_id = matched_target.target_id if matched_target else cdp_fallback_target_id
+		focus_url = matched_target.url if matched_target else url
+		logger.info(f'[{session_id}] Focusing on webview target: {focus_target_id[:8]}... url={focus_url}')
+
+		if not matched_target and cdp_fallback_target_id:
+			# Target was found via CDP HTTP but not tracked by session manager.
+			# Explicitly attach so browser-use creates a session for it.
+			try:
+				cdp_client = browser_session._cdp_client_root
+				await cdp_client.send.Target.attachToTarget(
+					params={'targetId': cdp_fallback_target_id, 'flatten': True}
+				)
+				await asyncio.sleep(1)  # Let the attach event propagate
+				logger.info(f'[{session_id}] Explicitly attached to fallback target')
+			except Exception as e:
+				logger.warning(f'[{session_id}] Fallback target attach: {e}')
+
+		await browser_session.get_or_create_cdp_session(focus_target_id, focus=True)
+		browser_session.agent_focus_target_id = focus_target_id
 
 		await log_to_frontend(session_id, 'Connected to browser via CDP', 'info')
 
