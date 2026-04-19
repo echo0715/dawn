@@ -138,12 +138,21 @@ async def parse_resume(req: ResumeRequest):
 				pass
 
 		if not text.strip():
+			# Render first page of PDF to PNG so OpenAI vision API accepts it
+			import fitz
+			doc = fitz.open(stream=pdf_data, filetype='pdf')
+			page = doc[0]
+			pix = page.get_pixmap(dpi=150)
+			png_bytes = pix.tobytes('png')
+			doc.close()
+			import base64 as _b64
+			png_b64 = _b64.b64encode(png_bytes).decode()
 			response = await get_openai_client().chat.completions.create(
-				model='gpt-5.4-mini',
+				model='gpt-4o-mini',
 				messages=[
 					{'role': 'system', 'content': 'Extract the following fields from this resume image. Return ONLY a JSON object with keys: name, email, phone, linkedin, location. Use empty string for missing fields.'},
 					{'role': 'user', 'content': [
-						{'type': 'image_url', 'image_url': {'url': f'data:application/pdf;base64,{req.file_base64}', 'detail': 'high'}},
+						{'type': 'image_url', 'image_url': {'url': f'data:image/png;base64,{png_b64}', 'detail': 'high'}},
 						{'type': 'text', 'text': 'Extract profile info from this resume.'},
 					]},
 				],
@@ -152,7 +161,7 @@ async def parse_resume(req: ResumeRequest):
 			)
 		else:
 			response = await get_openai_client().chat.completions.create(
-				model='gpt-5.4-mini',
+				model='gpt-4o-mini',
 				messages=[
 					{'role': 'system', 'content': 'Extract the following fields from this resume text. Return ONLY a JSON object with keys: name, email, phone, linkedin, location. Use empty string for missing fields. No markdown fences.'},
 					{'role': 'user', 'content': f'Resume text:\n\n{text[:4000]}'},
@@ -218,14 +227,35 @@ CDP_HTTP_URL = 'http://localhost:9222'
 # ─── Job-specific instructions for browser-use Agent ──────────────────────────
 
 JOB_APPLICATION_INSTRUCTIONS = """
-You are filling out a job application form. Additional rules:
-- Fill fields with the applicant's real information from the task description.
-- For open-ended questions (cover letter, "why do you want to work here", etc.), write brief professional responses.
-- For file uploads (resume), click the file input element to trigger the upload dialog.
-- If you see a CAPTCHA you cannot bypass, report done with success=false.
-- After submitting, verify the confirmation page and report done with success=true.
-- If a page has "Apply", "Submit", or "Next" buttons, click them to proceed.
-- Do not navigate away from the application site.
+You are filling out a job application form. Follow these rules exactly:
+
+FILLING FIELDS:
+- Fill ALL fields with the applicant's real information from the task description.
+- For open-ended questions (cover letter, "why do you want to work here"), write a brief professional response.
+- For file uploads (resume), use the upload_file action with the resume path.
+- Always use clear=true when typing into form fields to replace existing placeholder text.
+- After typing into a field, immediately move on to the next field WITHOUT verifying the value. Assume success unless you get an explicit error.
+- NEVER use execute_script to check or enumerate form field values — the browser-use element indices are accurate; use them directly.
+- NEVER try to access iframe content via JavaScript (cross-origin iframes block JS; the form elements are still accessible via their element indices).
+
+AUTOCOMPLETE:
+- Before filling any fields, run ONCE: document.querySelectorAll('input,textarea,select').forEach(el=>{el.setAttribute('autocomplete','new-password');el.setAttribute('autocorrect','off');el.setAttribute('autocapitalize','off');}); return document.querySelectorAll('input').length + ' inputs found';
+- For location/city fields that show dropdown suggestions, type the value then press Escape to dismiss.
+
+NAVIGATION:
+- If a page has "Apply", "Start Application", "Submit", or "Next" buttons, click them to proceed.
+- Do not navigate away from the application site under any circumstances.
+- If you see a CAPTCHA you cannot solve, call done(success=False, text="failure: CAPTCHA encountered").
+- After submitting, verify the confirmation page text and call done(success=True).
+
+STALE ELEMENT RECOVERY (CRITICAL — read carefully):
+- After any file upload, the page DOM re-renders and ALL element indices become invalid.
+- After a file upload, get a fresh page state (take one more step) before clicking any buttons.
+- If a click fails with any error containing "stale", "not belong to the document", "backendNodeId", or "Node with given id":
+  1. DO NOT navigate to any other URL — you MUST stay on the same page.
+  2. Use execute_script: var btns=document.querySelectorAll('button[type=submit],input[type=submit],button');for(var b of btns){if(/submit|apply|next|continue/i.test(b.textContent+b.value)){b.click();break;}} return 'clicked';
+  3. If step 2 returns no result, use send_keys with key="Return".
+  4. After 2 failed attempts, call done(success=False, text="failure: could not click submit after DOM refresh").
 """
 
 
@@ -263,6 +293,12 @@ async def run_agent(session_id: str, url: str, profile: dict):
 		browser_session = BrowserSession(
 			cdp_url=CDP_HTTP_URL,
 			keep_alive=True,
+			browser_profile=BrowserProfile(
+				cross_origin_iframes=True,   # needed to find file inputs inside Workday/ATS iframes
+				max_iframes=5,               # was 100 — keep shallow to avoid DOM build timeouts
+				max_iframe_depth=1,          # was 5 — only 1 level deep, enough for ATS file inputs
+				paint_order_filtering=False, # experimental; disable for stability
+			),
 		)
 
 		# Retry start() in case CDP isn't fully ready
@@ -396,10 +432,16 @@ async def run_agent(session_id: str, url: str, profile: dict):
 Applicant profile:
 {profile_str}
 
-Use the applicant's profile information to fill in all form fields accurately."""
+Use the applicant's profile information to fill in all form fields accurately.
+
+IMPORTANT RULES:
+- Only work on the provided URL. Do NOT navigate to other websites or search for alternative job postings.
+- If the page returns a 404, is unavailable, requires account login, or has no interactive elements after 3 consecutive steps, call done(text="failure: <reason>") immediately — do not search for alternatives and do not retry.
+- Do not create accounts or sign up for services.
+- Submit only when all required fields are filled."""
 
 		llm = ChatOpenAI(
-			model='gpt-5-mini',
+			model='gpt-4o',
 			temperature=0.1,
 		)
 
@@ -414,7 +456,7 @@ Use the applicant's profile information to fill in all form fields accurately.""
 			task=task,
 			llm=llm,
 			browser_session=browser_session,
-			use_vision=True,
+			use_vision=False,  # screenshots via CDP conflict when two calls run concurrently; DOM-only is more reliable here
 			max_actions_per_step=3,
 			extend_system_message=JOB_APPLICATION_INSTRUCTIONS,
 			directly_open_url=False,

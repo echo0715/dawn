@@ -1068,9 +1068,10 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 		self.logger.debug(f'🌐 Step {self.state.n_steps}: Getting browser state...')
 		# Always take screenshots for all steps
-		self.logger.debug('📸 Requesting browser state with include_screenshot=True')
+		_include_screenshot = self.settings.use_vision is not False  # skip screenshot when use_vision=False (slow on Electron CDP)
+		self.logger.debug(f'📸 Requesting browser state with include_screenshot={_include_screenshot}')
 		browser_state_summary = await self.browser_session.get_browser_state_summary(
-			include_screenshot=True,  # always capture even if use_vision=False so that cloud sync is useful (it's fast now anyway)
+			include_screenshot=_include_screenshot,
 			include_recent_events=self.include_recent_events,
 		)
 		if browser_state_summary.screenshot:

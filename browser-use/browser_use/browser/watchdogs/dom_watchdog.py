@@ -380,14 +380,21 @@ class DOMWatchdog(BaseWatchdog):
 					suppress_exceptions=True,
 				)
 
-			# Wait for both tasks to complete
+			# Wait for both tasks to complete (with per-task timeouts so the handler
+			# never exceeds the event_timeout even on heavy ATS pages like Workday)
 			content = None
 			screenshot_b64 = None
+			_DOM_TASK_TIMEOUT = 45.0
+			_SCREENSHOT_TASK_TIMEOUT = 45.0
 
 			if dom_task:
 				try:
-					content = await dom_task
+					content = await asyncio.wait_for(asyncio.shield(dom_task), timeout=_DOM_TASK_TIMEOUT)
 					self.logger.debug('🔍 DOMWatchdog.on_BrowserStateRequestEvent: ✅ DOM tree build completed')
+				except asyncio.TimeoutError:
+					dom_task.cancel()
+					self.logger.warning(f'🔍 DOMWatchdog.on_BrowserStateRequestEvent: DOM build timed out after {_DOM_TASK_TIMEOUT}s, using minimal state')
+					content = SerializedDOMState(_root=None, selector_map={})
 				except Exception as e:
 					self.logger.warning(f'🔍 DOMWatchdog.on_BrowserStateRequestEvent: DOM build failed: {e}, using minimal state')
 					content = SerializedDOMState(_root=None, selector_map={})
@@ -396,8 +403,12 @@ class DOMWatchdog(BaseWatchdog):
 
 			if screenshot_task:
 				try:
-					screenshot_b64 = await screenshot_task
+					screenshot_b64 = await asyncio.wait_for(asyncio.shield(screenshot_task), timeout=_SCREENSHOT_TASK_TIMEOUT)
 					self.logger.debug('🔍 DOMWatchdog.on_BrowserStateRequestEvent: ✅ Clean screenshot captured')
+				except asyncio.TimeoutError:
+					screenshot_task.cancel()
+					self.logger.warning(f'🔍 DOMWatchdog.on_BrowserStateRequestEvent: Screenshot timed out after {_SCREENSHOT_TASK_TIMEOUT}s')
+					screenshot_b64 = None
 				except Exception as e:
 					self.logger.warning(f'🔍 DOMWatchdog.on_BrowserStateRequestEvent: Clean screenshot failed: {e}')
 					screenshot_b64 = None

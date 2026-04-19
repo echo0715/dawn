@@ -623,7 +623,19 @@ class Tools(Generic[Context]):
 			except BrowserError as e:
 				return handle_browser_error(e)
 			except Exception as e:
-				error_msg = f'Failed to click element {params.index}: {str(e)}'
+				err_str = str(e)
+				# Stale DOM node: backend_node_id is no longer valid after page re-render (e.g. after file upload)
+				if any(kw in err_str for kw in ('not belong to the document', 'backendNodeId', 'stale', 'No node with given id')):
+					stale_msg = (
+						f'Element index {params.index} is stale — the DOM was rebuilt (e.g. after file upload). '
+						'DO NOT navigate away. Use execute_script to click the submit button: '
+						'`var btns=document.querySelectorAll("button[type=submit],input[type=submit],button");'
+						'for(var b of btns){if(/submit|apply|next|continue/i.test(b.textContent+b.value)){b.click();break;}}`'
+						' or use send_keys with key="Return".'
+					)
+					logger.warning(f'⚠️ Stale node click: element {params.index} — {err_str}')
+					return ActionResult(error=stale_msg)
+				error_msg = f'Failed to click element {params.index}: {err_str}'
 				return ActionResult(error=error_msg)
 
 		# Store click handlers for re-registration
