@@ -892,11 +892,17 @@ textarea {
   left: 0;
   width: 100%;
   height: 100%;
-  display: none;
+  display: flex;
+  opacity: 0;                                                     
+  pointer-events: none;                                           
+  z-index: 1;   
 }
 
 .webview-container webview.active {
-  display: flex;
+  /* display: flex; */
+  opacity: 1;                                                     
+  pointer-events: auto;                                           
+  z-index: 2;   
 }
 
 .webview-empty {
