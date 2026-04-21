@@ -69,8 +69,10 @@ SessionManager._handle_target_attached = _patched_handle_target_attached
 # ─── Now import browser-use components ───────────────────────────────────────
 
 from browser_use.agent.service import Agent
+from browser_use.agent.views import ActionResult
 from browser_use.browser import BrowserProfile, BrowserSession
 from browser_use.llm.openai.chat import ChatOpenAI
+from browser_use.tools.service import Tools
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelname)s %(message)s')
 logger = logging.getLogger('job-agent')
@@ -139,7 +141,7 @@ async def parse_resume(req: ResumeRequest):
 
 		if not text.strip():
 			response = await get_openai_client().chat.completions.create(
-				model='gpt-5.4-mini',
+				model='gpt-4o-mini',
 				messages=[
 					{'role': 'system', 'content': 'Extract the following fields from this resume image. Return ONLY a JSON object with keys: name, email, phone, linkedin, location. Use empty string for missing fields.'},
 					{'role': 'user', 'content': [
@@ -152,7 +154,7 @@ async def parse_resume(req: ResumeRequest):
 			)
 		else:
 			response = await get_openai_client().chat.completions.create(
-				model='gpt-5.4-mini',
+				model='gpt-4o-mini',
 				messages=[
 					{'role': 'system', 'content': 'Extract the following fields from this resume text. Return ONLY a JSON object with keys: name, email, phone, linkedin, location. Use empty string for missing fields. No markdown fences.'},
 					{'role': 'user', 'content': f'Resume text:\n\n{text[:4000]}'},
@@ -181,6 +183,7 @@ async def parse_resume(req: ResumeRequest):
 ws_connection: WebSocket | None = None
 webview_ready_events: dict[str, asyncio.Event] = {}
 webview_urls: dict[str, str] = {}
+session_resume_events: dict[str, asyncio.Event] = {}
 
 
 # ─── Communication with Electron (UI only — no browser control) ──────────────
@@ -222,10 +225,19 @@ You are filling out a job application form. Additional rules:
 - Fill fields with the applicant's real information from the task description.
 - For open-ended questions (cover letter, "why do you want to work here", etc.), write brief professional responses.
 - For file uploads (resume), click the file input element to trigger the upload dialog.
-- If you see a CAPTCHA you cannot bypass, report done with success=false.
 - After submitting, verify the confirmation page and report done with success=true.
 - If a page has "Apply", "Submit", or "Next" buttons, click them to proceed.
 - Do not navigate away from the application site.
+
+HUMAN INTERVENTION:
+Some steps cannot be automated and require the human user. When you encounter ANY of the following, call the `request_human_intervention` action with a short `reason` describing what the user needs to do, then WAIT for it to return before continuing:
+- A CAPTCHA / reCAPTCHA / hCaptcha / "I am not a robot" challenge
+- An account creation / sign-up step (choose a password, verify identity)
+- A login / sign-in step that requires credentials you don't have
+- An email verification code / magic link / 2FA / SMS code
+- Any identity / phone verification
+- Any step that genuinely needs human judgement the profile cannot provide
+Do NOT report done with success=false for these cases — call `request_human_intervention` instead. The action will block until the user has completed their part, then you can continue filling out the rest of the form automatically.
 """
 
 
@@ -398,10 +410,53 @@ Applicant profile:
 
 Use the applicant's profile information to fill in all form fields accurately."""
 
+		llm_model = os.environ.get('LLM_MODEL', 'gpt-4.1-mini')
+		llm_base_url = os.environ.get('LLM_BASE_URL') or None
 		llm = ChatOpenAI(
-			model='gpt-5-mini',
+			model=llm_model,
+			base_url=llm_base_url,
 			temperature=0.1,
 		)
+
+		use_vision = os.environ.get('LLM_USE_VISION', 'true').strip().lower() != 'false'
+
+		# Per-session Tools registry with a `request_human_intervention` action.
+		# The action pauses the agent and notifies the frontend; it resolves
+		# once the user clicks "Resume" on the corresponding session.
+		tools = Tools()
+
+		@tools.registry.action(
+			'Pause the agent and request human intervention. Call this for CAPTCHAs, '
+			'account creation, login prompts, email/SMS verification codes, or any '
+			'step that genuinely requires the human user. Provide a concise `reason` '
+			'describing what the user needs to do. The action blocks until the user '
+			'clicks "Resume", then returns so you can continue automating the rest.'
+		)
+		async def request_human_intervention(reason: str) -> ActionResult:
+			resume_event = session_resume_events.get(session_id)
+			if resume_event is None:
+				resume_event = asyncio.Event()
+				session_resume_events[session_id] = resume_event
+			resume_event.clear()
+
+			await send({
+				'type': 'session_needs_review',
+				'session_id': session_id,
+				'reason': reason,
+			})
+			await log_to_frontend(session_id, f'Needs human intervention: {reason}', 'action')
+
+			await resume_event.wait()
+
+			await send({
+				'type': 'session_resumed',
+				'session_id': session_id,
+			})
+			await log_to_frontend(session_id, 'User resumed — continuing automation', 'info')
+			return ActionResult(
+				extracted_content=f'User completed the human-intervention step: {reason}. Continue with the rest of the application.',
+				long_term_memory=f'Human handled: {reason}',
+			)
 
 		# Create browser-use Agent with full CDP features:
 		# - DOM + Snapshot + AX tree fusion
@@ -414,7 +469,8 @@ Use the applicant's profile information to fill in all form fields accurately.""
 			task=task,
 			llm=llm,
 			browser_session=browser_session,
-			use_vision=True,
+			tools=tools,
+			use_vision=use_vision,
 			max_actions_per_step=3,
 			extend_system_message=JOB_APPLICATION_INSTRUCTIONS,
 			directly_open_url=False,
@@ -491,6 +547,7 @@ async def websocket_endpoint(ws: WebSocket):
 				for i, url in enumerate(urls):
 					session_id = f'session_{i}'
 					webview_ready_events[session_id] = asyncio.Event()
+					session_resume_events[session_id] = asyncio.Event()
 					await send({
 						'type': 'session_created',
 						'session_id': session_id,
@@ -498,6 +555,13 @@ async def websocket_endpoint(ws: WebSocket):
 					})
 
 				asyncio.create_task(run_agents_parallel(urls, profile))
+
+			elif msg['type'] == 'resume_session':
+				sid = msg.get('session_id')
+				event = session_resume_events.get(sid)
+				if event:
+					event.set()
+					logger.info(f'Resume requested for {sid}')
 
 			elif msg['type'] == 'webview_ready':
 				sid = msg.get('session_id')

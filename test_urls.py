@@ -5,6 +5,13 @@ import asyncio
 import json
 import websockets
 
+DEMO_URLS = [
+    "http://reingoldinc.applytojob.com/apply/2oofuntdNf/Full-Stack-Developer-Intern",
+    "https://jobs.lever.co/hermeus/a3a1f0ea-6a4f-42e5-81c8-3b34dac22a67/apply",
+    "https://job-boards.greenhouse.io/astranis/jobs/4667477006", # Maybe bad
+
+]
+
 TEST_URLS = [
     "https://www.amazon.jobs/jobs/3179209/apply",
     "https://nvidia.wd5.myworkdayjobs.com/en-US/nvidiaexternalcareersite/job/US-CA-Santa-Clara/NVIDIA-2026-Internships--Software-Engineering-_JR2003206",
