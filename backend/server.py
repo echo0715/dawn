@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import traceback
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -76,6 +77,66 @@ from browser_use.tools.service import Tools
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelname)s %(message)s')
 logger = logging.getLogger('job-agent')
+
+# ─── Verbose logging ─────────────────────────────────────────────────────────
+# When VERBOSE_LOGGING is enabled, each agent run dumps per-step screenshots,
+# the full text fed to the LLM, and the LLM's response into
+# logs/{datetime}/{run_id}/.
+
+VERBOSE_LOGGING = os.environ.get('VERBOSE_LOGGING', 'false').strip().lower() == 'true'
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+VERBOSE_LOG_ROOT: Path | None = (
+	PROJECT_ROOT / 'logs' / datetime.now().strftime('%Y%m%d_%H%M%S')
+	if VERBOSE_LOGGING else None
+)
+if VERBOSE_LOG_ROOT is not None:
+	VERBOSE_LOG_ROOT.mkdir(parents=True, exist_ok=True)
+	logger.info(f'Verbose logging enabled → {VERBOSE_LOG_ROOT}')
+
+
+def _serialize_message(msg) -> str:
+	"""Render a browser-use LLM message as readable text for the verbose log."""
+	try:
+		return msg.model_dump_json(indent=2, exclude_none=True)
+	except Exception:
+		return repr(msg)
+
+
+def _write_step_logs(run_dir: Path, step: int, agent_inst) -> None:
+	"""Dump screenshot, observation (LLM input), and action (LLM output) for one step."""
+	try:
+		# Screenshot — last entry in agent history corresponds to the just-finished step.
+		try:
+			history_items = agent_inst.history.history
+			screenshot_b64 = history_items[-1].state.get_screenshot() if history_items else None
+		except Exception:
+			screenshot_b64 = None
+		if screenshot_b64:
+			(run_dir / f'step{step}_screenshot.png').write_bytes(base64.b64decode(screenshot_b64))
+
+		# Observation — the full prompt sent to the LLM this step.
+		try:
+			input_messages = agent_inst._message_manager.get_messages()
+			observation_text = '\n\n'.join(
+				f'=== message[{i}] role={getattr(m, "role", "?")} ===\n{_serialize_message(m)}'
+				for i, m in enumerate(input_messages)
+			)
+		except Exception as e:
+			observation_text = f'<failed to capture observation: {e}>'
+		(run_dir / f'step{step}_observation.txt').write_text(observation_text)
+
+		# Action — the model's structured output (thinking + action list).
+		try:
+			model_output = agent_inst.state.last_model_output
+			action_text = (
+				model_output.model_dump_json(indent=2, exclude_none=True)
+				if model_output is not None else '<no model output>'
+			)
+		except Exception as e:
+			action_text = f'<failed to capture action: {e}>'
+		(run_dir / f'step{step}_action.txt').write_text(action_text)
+	except Exception as e:
+		logger.warning(f'Verbose log write failed for step {step}: {e}')
 
 app = FastAPI()
 
@@ -476,6 +537,16 @@ Use the applicant's profile information to fill in all form fields accurately.""
 			directly_open_url=False,
 		)
 
+		# Verbose-logging directory for this run (folder named with the run id).
+		run_log_dir: Path | None = None
+		if VERBOSE_LOG_ROOT is not None:
+			run_id = session_id.split('_', 1)[1] if '_' in session_id else session_id
+			run_log_dir = VERBOSE_LOG_ROOT / run_id
+			run_log_dir.mkdir(parents=True, exist_ok=True)
+			(run_log_dir / 'url').write_text(url)
+
+		step_counter = {'i': 0}
+
 		async def on_step_start(agent_inst):
 			step = agent_inst.state.n_steps
 			await log_to_frontend(session_id, f'Step {step}: Analyzing page...', 'step')
@@ -488,6 +559,10 @@ Use the applicant's profile information to fill in all form fields accurately.""
 					thinking = re.sub(r'</?think>', '', thinking).strip()
 					if thinking:
 						await log_to_frontend(session_id, f'Agent: {thinking}', 'info')
+
+			if run_log_dir is not None:
+				_write_step_logs(run_log_dir, step_counter['i'], agent_inst)
+				step_counter['i'] += 1
 
 		await log_to_frontend(session_id, 'Starting browser-use agent (CDP mode)...', 'info')
 		history = await agent.run(
