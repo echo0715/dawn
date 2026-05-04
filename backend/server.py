@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import traceback
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -69,11 +70,73 @@ SessionManager._handle_target_attached = _patched_handle_target_attached
 # ─── Now import browser-use components ───────────────────────────────────────
 
 from browser_use.agent.service import Agent
+from browser_use.agent.views import ActionResult
 from browser_use.browser import BrowserProfile, BrowserSession
 from browser_use.llm.openai.chat import ChatOpenAI
+from browser_use.tools.service import Tools
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelname)s %(message)s')
 logger = logging.getLogger('job-agent')
+
+# ─── Verbose logging ─────────────────────────────────────────────────────────
+# When VERBOSE_LOGGING is enabled, each agent run dumps per-step screenshots,
+# the full text fed to the LLM, and the LLM's response into
+# logs/{datetime}/{run_id}/.
+
+VERBOSE_LOGGING = os.environ.get('VERBOSE_LOGGING', 'false').strip().lower() == 'true'
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+VERBOSE_LOG_ROOT: Path | None = (
+	PROJECT_ROOT / 'logs' / datetime.now().strftime('%Y%m%d_%H%M%S')
+	if VERBOSE_LOGGING else None
+)
+if VERBOSE_LOG_ROOT is not None:
+	VERBOSE_LOG_ROOT.mkdir(parents=True, exist_ok=True)
+	logger.info(f'Verbose logging enabled → {VERBOSE_LOG_ROOT}')
+
+
+def _serialize_message(msg) -> str:
+	"""Render a browser-use LLM message as readable text for the verbose log."""
+	try:
+		return msg.model_dump_json(indent=2, exclude_none=True)
+	except Exception:
+		return repr(msg)
+
+
+def _write_step_logs(run_dir: Path, step: int, agent_inst) -> None:
+	"""Dump screenshot, observation (LLM input), and action (LLM output) for one step."""
+	try:
+		# Screenshot — last entry in agent history corresponds to the just-finished step.
+		try:
+			history_items = agent_inst.history.history
+			screenshot_b64 = history_items[-1].state.get_screenshot() if history_items else None
+		except Exception:
+			screenshot_b64 = None
+		if screenshot_b64:
+			(run_dir / f'step{step}_screenshot.png').write_bytes(base64.b64decode(screenshot_b64))
+
+		# Observation — the full prompt sent to the LLM this step.
+		try:
+			input_messages = agent_inst._message_manager.get_messages()
+			observation_text = '\n\n'.join(
+				f'=== message[{i}] role={getattr(m, "role", "?")} ===\n{_serialize_message(m)}'
+				for i, m in enumerate(input_messages)
+			)
+		except Exception as e:
+			observation_text = f'<failed to capture observation: {e}>'
+		(run_dir / f'step{step}_observation.txt').write_text(observation_text)
+
+		# Action — the model's structured output (thinking + action list).
+		try:
+			model_output = agent_inst.state.last_model_output
+			action_text = (
+				model_output.model_dump_json(indent=2, exclude_none=True)
+				if model_output is not None else '<no model output>'
+			)
+		except Exception as e:
+			action_text = f'<failed to capture action: {e}>'
+		(run_dir / f'step{step}_action.txt').write_text(action_text)
+	except Exception as e:
+		logger.warning(f'Verbose log write failed for step {step}: {e}')
 
 app = FastAPI()
 
@@ -139,7 +202,7 @@ async def parse_resume(req: ResumeRequest):
 
 		if not text.strip():
 			response = await get_openai_client().chat.completions.create(
-				model='gpt-5.4-mini',
+				model='gpt-4o-mini',
 				messages=[
 					{'role': 'system', 'content': 'Extract the following fields from this resume image. Return ONLY a JSON object with keys: name, email, phone, linkedin, location. Use empty string for missing fields.'},
 					{'role': 'user', 'content': [
@@ -152,7 +215,7 @@ async def parse_resume(req: ResumeRequest):
 			)
 		else:
 			response = await get_openai_client().chat.completions.create(
-				model='gpt-5.4-mini',
+				model='gpt-4o-mini',
 				messages=[
 					{'role': 'system', 'content': 'Extract the following fields from this resume text. Return ONLY a JSON object with keys: name, email, phone, linkedin, location. Use empty string for missing fields. No markdown fences.'},
 					{'role': 'user', 'content': f'Resume text:\n\n{text[:4000]}'},
@@ -181,6 +244,7 @@ async def parse_resume(req: ResumeRequest):
 ws_connection: WebSocket | None = None
 webview_ready_events: dict[str, asyncio.Event] = {}
 webview_urls: dict[str, str] = {}
+session_resume_events: dict[str, asyncio.Event] = {}
 
 
 # ─── Communication with Electron (UI only — no browser control) ──────────────
@@ -222,10 +286,19 @@ You are filling out a job application form. Additional rules:
 - Fill fields with the applicant's real information from the task description.
 - For open-ended questions (cover letter, "why do you want to work here", etc.), write brief professional responses.
 - For file uploads (resume), click the file input element to trigger the upload dialog.
-- If you see a CAPTCHA you cannot bypass, report done with success=false.
 - After submitting, verify the confirmation page and report done with success=true.
 - If a page has "Apply", "Submit", or "Next" buttons, click them to proceed.
 - Do not navigate away from the application site.
+
+HUMAN INTERVENTION:
+Some steps cannot be automated and require the human user. When you encounter ANY of the following, call the `request_human_intervention` action with a short `reason` describing what the user needs to do, then WAIT for it to return before continuing:
+- A CAPTCHA / reCAPTCHA / hCaptcha / "I am not a robot" challenge
+- An account creation / sign-up step (choose a password, verify identity)
+- A login / sign-in step that requires credentials you don't have
+- An email verification code / magic link / 2FA / SMS code
+- Any identity / phone verification
+- Any step that genuinely needs human judgement the profile cannot provide
+Do NOT report done with success=false for these cases — call `request_human_intervention` instead. The action will block until the user has completed their part, then you can continue filling out the rest of the form automatically.
 """
 
 
@@ -398,10 +471,53 @@ Applicant profile:
 
 Use the applicant's profile information to fill in all form fields accurately."""
 
+		llm_model = os.environ.get('LLM_MODEL', 'gpt-4.1-mini')
+		llm_base_url = os.environ.get('LLM_BASE_URL') or None
 		llm = ChatOpenAI(
-			model='gpt-5-mini',
+			model=llm_model,
+			base_url=llm_base_url,
 			temperature=0.1,
 		)
+
+		use_vision = os.environ.get('LLM_USE_VISION', 'true').strip().lower() != 'false'
+
+		# Per-session Tools registry with a `request_human_intervention` action.
+		# The action pauses the agent and notifies the frontend; it resolves
+		# once the user clicks "Resume" on the corresponding session.
+		tools = Tools()
+
+		@tools.registry.action(
+			'Pause the agent and request human intervention. Call this for CAPTCHAs, '
+			'account creation, login prompts, email/SMS verification codes, or any '
+			'step that genuinely requires the human user. Provide a concise `reason` '
+			'describing what the user needs to do. The action blocks until the user '
+			'clicks "Resume", then returns so you can continue automating the rest.'
+		)
+		async def request_human_intervention(reason: str) -> ActionResult:
+			resume_event = session_resume_events.get(session_id)
+			if resume_event is None:
+				resume_event = asyncio.Event()
+				session_resume_events[session_id] = resume_event
+			resume_event.clear()
+
+			await send({
+				'type': 'session_needs_review',
+				'session_id': session_id,
+				'reason': reason,
+			})
+			await log_to_frontend(session_id, f'Needs human intervention: {reason}', 'action')
+
+			await resume_event.wait()
+
+			await send({
+				'type': 'session_resumed',
+				'session_id': session_id,
+			})
+			await log_to_frontend(session_id, 'User resumed — continuing automation', 'info')
+			return ActionResult(
+				extracted_content=f'User completed the human-intervention step: {reason}. Continue with the rest of the application.',
+				long_term_memory=f'Human handled: {reason}',
+			)
 
 		# Create browser-use Agent with full CDP features:
 		# - DOM + Snapshot + AX tree fusion
@@ -414,11 +530,22 @@ Use the applicant's profile information to fill in all form fields accurately.""
 			task=task,
 			llm=llm,
 			browser_session=browser_session,
-			use_vision=True,
+			tools=tools,
+			use_vision=use_vision,
 			max_actions_per_step=3,
 			extend_system_message=JOB_APPLICATION_INSTRUCTIONS,
 			directly_open_url=False,
 		)
+
+		# Verbose-logging directory for this run (folder named with the run id).
+		run_log_dir: Path | None = None
+		if VERBOSE_LOG_ROOT is not None:
+			run_id = session_id.split('_', 1)[1] if '_' in session_id else session_id
+			run_log_dir = VERBOSE_LOG_ROOT / run_id
+			run_log_dir.mkdir(parents=True, exist_ok=True)
+			(run_log_dir / 'url').write_text(url)
+
+		step_counter = {'i': 0}
 
 		async def on_step_start(agent_inst):
 			step = agent_inst.state.n_steps
@@ -432,6 +559,10 @@ Use the applicant's profile information to fill in all form fields accurately.""
 					thinking = re.sub(r'</?think>', '', thinking).strip()
 					if thinking:
 						await log_to_frontend(session_id, f'Agent: {thinking}', 'info')
+
+			if run_log_dir is not None:
+				_write_step_logs(run_log_dir, step_counter['i'], agent_inst)
+				step_counter['i'] += 1
 
 		await log_to_frontend(session_id, 'Starting browser-use agent (CDP mode)...', 'info')
 		history = await agent.run(
@@ -491,6 +622,7 @@ async def websocket_endpoint(ws: WebSocket):
 				for i, url in enumerate(urls):
 					session_id = f'session_{i}'
 					webview_ready_events[session_id] = asyncio.Event()
+					session_resume_events[session_id] = asyncio.Event()
 					await send({
 						'type': 'session_created',
 						'session_id': session_id,
@@ -498,6 +630,13 @@ async def websocket_endpoint(ws: WebSocket):
 					})
 
 				asyncio.create_task(run_agents_parallel(urls, profile))
+
+			elif msg['type'] == 'resume_session':
+				sid = msg.get('session_id')
+				event = session_resume_events.get(sid)
+				if event:
+					event.set()
+					logger.info(f'Resume requested for {sid}')
 
 			elif msg['type'] == 'webview_ready':
 				sid = msg.get('session_id')

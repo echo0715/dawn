@@ -337,7 +337,28 @@ function handleMessage(msg) {
     case 'session_done':
       if (!sessions[msg.session_id]) break;
       sessions[msg.session_id].status = msg.success ? 'completed' : 'failed';
+      sessions[msg.session_id].reviewReason = null;
       addLog(msg.session_id, msg.message || (msg.success ? 'Done!' : 'Failed.'), msg.success ? 'success' : 'error');
+      renderTabs();
+      if (activeSessionId === msg.session_id) renderLogs();
+      break;
+
+    case 'session_needs_review':
+      if (!sessions[msg.session_id]) break;
+      sessions[msg.session_id].status = 'needs_review';
+      sessions[msg.session_id].reviewReason = msg.reason || 'Needs your attention';
+      addLog(msg.session_id, `Needs review: ${msg.reason || ''}`, 'action');
+      renderTabs();
+      if (activeSessionId === msg.session_id) {
+        renderLogs();
+        selectSession(msg.session_id);
+      }
+      break;
+
+    case 'session_resumed':
+      if (!sessions[msg.session_id]) break;
+      sessions[msg.session_id].status = 'running';
+      sessions[msg.session_id].reviewReason = null;
       renderTabs();
       if (activeSessionId === msg.session_id) renderLogs();
       break;
@@ -436,23 +457,52 @@ function renderTabs() {
   sessionTabs.innerHTML = '';
   for (const session of Object.values(sessions)) {
     const tab = document.createElement('div');
-    tab.className = `session-tab${session.id === activeSessionId ? ' active' : ''}`;
-    tab.onclick = () => selectSession(session.id);
+    const needsReview = session.status === 'needs_review';
+    tab.className = `session-tab${session.id === activeSessionId ? ' active' : ''}${needsReview ? ' needs-review' : ''}`;
+    tab.onclick = (e) => {
+      if (e.target.closest('.btn-resume-session')) return;
+      selectSession(session.id);
+    };
 
     let domain;
     try { domain = new URL(session.url).hostname; }
     catch { domain = session.url.substring(0, 30); }
 
+    const statusLabel = needsReview ? 'Needs review' : capitalize(session.status);
+    const reviewBadge = needsReview ? `<span class="review-badge">Review</span>` : '';
+    const reasonLine = needsReview && session.reviewReason
+      ? `<div class="tab-reason" title="${escapeHtml(session.reviewReason)}">${escapeHtml(session.reviewReason)}</div>`
+      : '';
+    const resumeBtn = needsReview
+      ? `<button class="btn-resume-session" data-session-id="${session.id}" title="I've completed the human step — let the agent continue">Resume</button>`
+      : '';
+
     tab.innerHTML = `
       <div class="status-dot ${session.status}"></div>
       <div class="tab-info">
-        <div class="tab-title">${domain}</div>
-        <div class="tab-status">${capitalize(session.status)}</div>
+        <div class="tab-title">${domain} ${reviewBadge}</div>
+        <div class="tab-status">${statusLabel}</div>
+        ${reasonLine}
+        ${resumeBtn}
       </div>
     `;
     sessionTabs.appendChild(tab);
   }
 }
+
+sessionTabs.addEventListener('click', (e) => {
+  const btn = e.target.closest('.btn-resume-session');
+  if (!btn) return;
+  e.stopPropagation();
+  const sid = btn.dataset.sessionId;
+  if (!sid || !sessions[sid]) return;
+  sessions[sid].status = 'running';
+  sessions[sid].reviewReason = null;
+  addLog(sid, 'Resumed by user', 'info');
+  sendMessage({ type: 'resume_session', session_id: sid });
+  renderTabs();
+  if (activeSessionId === sid) renderLogs();
+});
 
 function selectSession(id) {
   activeSessionId = id;
@@ -470,7 +520,7 @@ function renderLogs() {
     return;
   }
 
-  logBarStatus.textContent = capitalize(session.status);
+  logBarStatus.textContent = session.status === 'needs_review' ? 'Needs review' : capitalize(session.status);
   logBarStatus.className = `log-bar-status ${session.status}`;
 
   logArea.innerHTML = session.logs
