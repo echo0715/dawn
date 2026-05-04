@@ -8,7 +8,7 @@ It combines an Electron desktop app (the browser surface + UI), a FastAPI Python
 
 ## Architecture
 
-[!Architecture](./assets/Figure.png)
+![Architecture](./assets/Figure.png)
 
 ---
 
