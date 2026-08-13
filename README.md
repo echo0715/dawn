@@ -8,7 +8,7 @@ It combines an Electron desktop app (the browser surface + UI), a FastAPI Python
 
 ## Demo
 
-<img width="1280" height="720" alt="Project-Demo1-ezgif com-video-to-gif-converter" src="https://github.com/user-attachments/assets/9287d27e-8717-45ed-a7b3-b8c46510550c" />
+https://github.com/user-attachments/assets/762ceae8-f7fa-4ee8-a976-f984c9509f5e
 
 
 ---
